@@ -1,13 +1,13 @@
-// Import required packages
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:tflite/tflite.dart';
+import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:image/image.dart' as img;
 
 void main() => runApp(MyApp());
 
-// setting up a string constant for the name of the model
+// 定数の定義
 const String dlv3 = 'DeepLabv3';
 
 class MyApp extends StatelessWidget {
@@ -25,100 +25,83 @@ class TfliteHome extends StatefulWidget {
   _TfliteHomeState createState() => _TfliteHomeState();
 }
 
-// This class is responsible for all the functions of the app
 class _TfliteHomeState extends State<TfliteHome> {
   String _model = dlv3;
 
-  // 非 nullable だと初期化必須エラーになるため、null許容型に修正
   File? _image;
 
   double? _imageWidth;
   double? _imageHeight;
   bool _busy = false;
 
-  var _recognitions;
+  Interpreter? _interpreter;
+  img.Image? _segmentationMask;
 
-  // when the widget initiates try to load the model for further actions
   @override
   void initState() {
     super.initState();
     _busy = true;
-    loadModel().then((val) {
+    loadModel().then((_) {
       setState(() {
         _busy = false;
       });
     });
   }
 
-  // method responsible for loading the model from the assets folder
-  loadModel() async {
-    // Undefined name 'Tflite' になる場合は pubspec.yaml に tflite パッケージを追加してください
-    Tflite.close();
+  // 色チャンネルを抽出するヘルパー関数
+  int getRed(int color) => (color >> 16) & 0xFF;
+  int getGreen(int color) => (color >> 8) & 0xFF;
+  int getBlue(int color) => color & 0xFF;
+  int getAlpha(int color) => (color >> 24) & 0xFF;
+
+  // モデルの読み込み
+  Future<void> loadModel() async {
     try {
-      String? res; // 型を String? に変更
-      if (_model == dlv3) {
-        res = await Tflite.loadModel(
-          model: 'assets/tflite/deeplabv3_257_mv_gpu.tflite',
-          labels: 'assets/tflite/deeplabv3_257_mv_gpu.txt',
-        );
-        // unused_local_variable 対策として出力
-        print(res);
-      }
-    } on PlatformException {
-      print("cant load model");
+      // TFLiteモデルをロード
+      _interpreter = await Interpreter.fromAsset('assets/tflite/deeplabv3_257_mv_gpu.tflite');
+    } on Exception catch (e) {
+      print('モデルの読み込みに失敗しました。');
+      print(e);
     }
   }
 
-  // method responsible for loading an image from image gallery of the device
+  // ギャラリーから画像を選択
   selectFromImagePicker() async {
-    // 古い API (ImagePicker.pickImage) は現在非推奨で、XFile を返すメソッドに変更
-    final picker = ImagePicker();
-    final XFile? pickedFile = await picker.pickImage(source: ImageSource.gallery);
+    var imagePicker = ImagePicker();
+    var pickedFile = await imagePicker.pickImage(source: ImageSource.gallery);
     if (pickedFile == null) return;
-
-    // XFile から File を生成
-    final image = File(pickedFile.path);
-
     setState(() {
       _busy = true;
     });
-    predictImage(image);
+    predictImage(File(pickedFile.path));
   }
 
-  // method responsible for loading image from live camera of the device
+  // カメラから画像を撮影
   selectFromCamera() async {
-    final picker = ImagePicker();
-    final XFile? pickedFile = await picker.pickImage(source: ImageSource.camera);
+    var imagePicker = ImagePicker();
+    var pickedFile = await imagePicker.pickImage(source: ImageSource.camera);
     if (pickedFile == null) return;
-
-    final image = File(pickedFile.path);
-
     setState(() {
       _busy = true;
     });
-    predictImage(image);
+    predictImage(File(pickedFile.path));
   }
 
-  // method responsible for predicting segmentation for the selected image
+  // 画像の予測を行う
   predictImage(File image) async {
-    // null safety 上 File は基本的に null になりませんが、元のコードをなるべく残すために ignore を付与
-    // ignore: unnecessary_null_comparison
-    if (image == null) return;
+    // 画像の幅と高さを取得
+    FileImage(image).resolve(ImageConfiguration()).addListener(
+      ImageStreamListener((ImageInfo info, bool _) {
+        setState(() {
+          _imageWidth = info.image.width.toDouble();
+          _imageHeight = info.image.height.toDouble();
+        });
+      }),
+    );
 
     if (_model == dlv3) {
       await dlv(image);
     }
-    // get the width and height of selected image
-    FileImage(image).resolve(ImageConfiguration()).addListener(
-      ImageStreamListener(
-            (ImageInfo info, bool _) {
-          setState(() {
-            _imageWidth = info.image.width.toDouble();
-            _imageHeight = info.image.height.toDouble();
-          });
-        },
-      ),
-    );
 
     setState(() {
       _image = image;
@@ -126,51 +109,98 @@ class _TfliteHomeState extends State<TfliteHome> {
     });
   }
 
-  // method responsible for giving actual prediction from the model
-  dlv(File image) async {
-    var recognitions = await Tflite.runSegmentationOnImage(
-      path: image.path,
-      imageMean: 0.0,
-      imageStd: 255.0,
-      outputType: "png",
-      asynch: true,
-    );
+  // DeepLabv3でセグメンテーションを実行
+  dlv(File imageFile) async {
+    // 画像を読み込み
+    var inputImage = img.decodeImage(await imageFile.readAsBytes());
+    if (inputImage == null) {
+      print('画像のデコードに失敗しました。');
+      return;
+    }
+
+    // 画像をリサイズ
+    var resizedImage = img.copyResize(inputImage, width: 257, height: 257);
+
+    // 画像をモデルの入力形式に変換
+    var inputTensor = imageToByteListFloat32(resizedImage);
+
+    // 入力と出力のバッファを準備
+    var output = List.filled(1 * 257 * 257, 0).reshape([1, 257, 257]);
+
+    // 推論を実行
+    _interpreter?.run(inputTensor, output);
+
+    // セグメンテーションマスクを生成
+    var maskBytes = await processOutput(output);
 
     setState(() {
-      _recognitions = recognitions;
+      _segmentationMask = img.decodeImage(maskBytes);
     });
   }
 
-  // build method is run each time app needs to re-build the widget
+  // 画像をFloat32のバイトリストに変換
+  Uint8List imageToByteListFloat32(img.Image image) {
+    var buffer = Float32List(1 * 257 * 257 * 3).buffer;
+    var pixels = buffer.asFloat32List();
+    int pixelIndex = 0;
+
+    for (var y = 0; y < 257; y++) {
+      for (var x = 0; x < 257; x++) {
+        var pixel = image.getPixel(x, y);
+        pixels[pixelIndex++] = (getRed(pixel) - 127.5) / 127.5;
+        pixels[pixelIndex++] = (getGreen(pixel) - 127.5) / 127.5;
+        pixels[pixelIndex++] = (getBlue(pixel) - 127.5) / 127.5;
+      }
+    }
+    return buffer.asUint8List();
+  }
+
+  // モデルの出力を処理してセグメンテーションマスクを生成
+  Future<Uint8List> processOutput(List output) async {
+    var mask = img.Image(width: 257, height: 257); // 名前付き引数を使用
+
+    var outputData = output.reshape([257, 257]);
+
+    for (int y = 0; y < 257; y++) {
+      for (int x = 0; x < 257; x++) {
+        int label = outputData[y][x].toInt();
+        if (label == 15) {
+          // 赤色 (RGB: 255, 0, 0, Alpha: 255)
+          mask.setPixelRgba(x, y, 255, 0, 0, 255);
+        } else {
+          // 透明 (RGB: 0, 0, 0, Alpha: 0)
+          mask.setPixelRgba(x, y, 0, 0, 0, 0);
+        }
+      }
+    }
+
+    // 画像をPNG形式にエンコード
+    return img.encodePng(mask);
+  }
+
   @override
   Widget build(BuildContext context) {
-    // get the width and height of current screen the app is running on
+    // 画面サイズを取得
     Size size = MediaQuery.of(context).size;
 
-    // initialize two variables that will represent final width and height of the segmentation
-    // and image preview on screen
+    // 画像の表示サイズを計算
     double finalW;
     double finalH;
 
-    // when the app is first launch usually image width and height will be null
-    // therefore for default value screen width and height is given
-    if (_imageWidth == null && _imageHeight == null) {
+    if (_imageWidth == null || _imageHeight == null) {
       finalW = size.width;
       finalH = size.height;
     } else {
-      // ratio width and ratio height will given ratio to
-      // scale up or down the preview image and segmentation
       double ratioW = size.width / _imageWidth!;
       double ratioH = size.height / _imageHeight!;
 
-      // final width and height after the ratio scaling is applied
       finalW = _imageWidth! * ratioW;
       finalH = _imageHeight! * ratioH;
     }
 
     List<Widget> stackChildren = [];
 
-    // when busy load a circular progress indicator
+    // 読み込み中の場合のインジケーター
     if (_busy) {
       stackChildren.add(
         Positioned(
@@ -183,7 +213,7 @@ class _TfliteHomeState extends State<TfliteHome> {
       );
     }
 
-    // widget to show image preview, when preview not available default text is shown
+    // 画像のプレビュー
     stackChildren.add(
       Positioned(
         top: 0.0,
@@ -191,7 +221,9 @@ class _TfliteHomeState extends State<TfliteHome> {
         width: finalW,
         height: finalH,
         child: _image == null
-            ? Center(child: Text('Please Select an Image From Camera or Gallery'))
+            ? Center(
+          child: Text('カメラまたはギャラリーから画像を選択してください'),
+        )
             : Image.file(
           _image!,
           fit: BoxFit.fill,
@@ -199,28 +231,28 @@ class _TfliteHomeState extends State<TfliteHome> {
       ),
     );
 
-    // widget to show segmentation preview, when segmentation not available default blank text is shown
-    stackChildren.add(
-      Positioned(
-        top: 0,
-        left: 0,
-        width: finalW,
-        height: finalH,
-        child: Opacity(
-          opacity: 0.7,
-          child: _recognitions == null
-              ? Center(child: Text(''))
-              : Image.memory(
-            _recognitions,
-            fit: BoxFit.fill,
+    // セグメンテーションマスクの表示
+    if (_segmentationMask != null) {
+      stackChildren.add(
+        Positioned(
+          top: 0,
+          left: 0,
+          width: finalW,
+          height: finalH,
+          child: Opacity(
+            opacity: 0.7,
+            child: Image.memory(
+              img.encodePng(_segmentationMask!),
+              fit: BoxFit.fill,
+            ),
           ),
         ),
-      ),
-    );
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('On-Device Image Segmentation'),
+        title: Text('オンデバイス画像セグメンテーション'),
         backgroundColor: Colors.redAccent,
       ),
       floatingActionButton: Stack(
@@ -231,7 +263,7 @@ class _TfliteHomeState extends State<TfliteHome> {
               alignment: Alignment.bottomCenter,
               child: FloatingActionButton(
                 child: Icon(Icons.image),
-                tooltip: 'Pick Image from Gallery',
+                tooltip: 'ギャラリーから画像を選択',
                 backgroundColor: Colors.purpleAccent,
                 onPressed: selectFromImagePicker,
               ),
@@ -244,7 +276,7 @@ class _TfliteHomeState extends State<TfliteHome> {
               child: FloatingActionButton(
                 child: Icon(Icons.camera),
                 backgroundColor: Colors.redAccent,
-                tooltip: 'Pick Image from Camera',
+                tooltip: 'カメラから画像を撮影',
                 onPressed: selectFromCamera,
               ),
             ),
