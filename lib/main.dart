@@ -21,7 +21,6 @@ class MyApp extends StatelessWidget {
 }
 
 class TfliteHome extends StatefulWidget {
-
   @override
   _TfliteHomeState createState() => _TfliteHomeState();
 }
@@ -30,10 +29,11 @@ class TfliteHome extends StatefulWidget {
 class _TfliteHomeState extends State<TfliteHome> {
   String _model = dlv3;
 
-  File _image;
+  // 非 nullable だと初期化必須エラーになるため、null許容型に修正
+  File? _image;
 
-  double _imageWidth;
-  double _imageHeight;
+  double? _imageWidth;
+  double? _imageHeight;
   bool _busy = false;
 
   var _recognitions;
@@ -49,34 +49,50 @@ class _TfliteHomeState extends State<TfliteHome> {
       });
     });
   }
- // method responsible for loading the model from the assets folder
+
+  // method responsible for loading the model from the assets folder
   loadModel() async {
+    // Undefined name 'Tflite' になる場合は pubspec.yaml に tflite パッケージを追加してください
     Tflite.close();
     try {
-      String res;
-      if(_model == dlv3) {
+      String? res; // 型を String? に変更
+      if (_model == dlv3) {
         res = await Tflite.loadModel(
           model: 'assets/tflite/deeplabv3_257_mv_gpu.tflite',
           labels: 'assets/tflite/deeplabv3_257_mv_gpu.txt',
         );
+        // unused_local_variable 対策として出力
+        print(res);
       }
     } on PlatformException {
       print("cant load model");
     }
   }
+
   // method responsible for loading an image from image gallery of the device
   selectFromImagePicker() async {
-    var image = await ImagePicker.pickImage(source: ImageSource.gallery, );
-    if(image == null) return;
+    // 古い API (ImagePicker.pickImage) は現在非推奨で、XFile を返すメソッドに変更
+    final picker = ImagePicker();
+    final XFile? pickedFile = await picker.pickImage(source: ImageSource.gallery);
+    if (pickedFile == null) return;
+
+    // XFile から File を生成
+    final image = File(pickedFile.path);
+
     setState(() {
       _busy = true;
     });
     predictImage(image);
   }
- // method responsible for loading image from live camera of the device
+
+  // method responsible for loading image from live camera of the device
   selectFromCamera() async {
-    var image = await ImagePicker.pickImage(source: ImageSource.camera);
-    if(image == null) return;
+    final picker = ImagePicker();
+    final XFile? pickedFile = await picker.pickImage(source: ImageSource.camera);
+    if (pickedFile == null) return;
+
+    final image = File(pickedFile.path);
+
     setState(() {
       _busy = true;
     });
@@ -85,23 +101,31 @@ class _TfliteHomeState extends State<TfliteHome> {
 
   // method responsible for predicting segmentation for the selected image
   predictImage(File image) async {
-    if(image == null) return;
-    if(_model == dlv3) {
+    // null safety 上 File は基本的に null になりませんが、元のコードをなるべく残すために ignore を付与
+    // ignore: unnecessary_null_comparison
+    if (image == null) return;
+
+    if (_model == dlv3) {
       await dlv(image);
     }
     // get the width and height of selected image
-    FileImage(image).resolve(ImageConfiguration()).addListener((ImageStreamListener((ImageInfo info, bool _){
-      setState(() {
-        _imageWidth = info.image.width.toDouble();
-        _imageHeight = info.image.height.toDouble();
-      });
-    })));
+    FileImage(image).resolve(ImageConfiguration()).addListener(
+      ImageStreamListener(
+            (ImageInfo info, bool _) {
+          setState(() {
+            _imageWidth = info.image.width.toDouble();
+            _imageHeight = info.image.height.toDouble();
+          });
+        },
+      ),
+    );
 
     setState(() {
       _image = image;
       _busy = false;
     });
   }
+
   // method responsible for giving actual prediction from the model
   dlv(File image) async {
     var recognitions = await Tflite.runSegmentationOnImage(
@@ -116,6 +140,7 @@ class _TfliteHomeState extends State<TfliteHome> {
       _recognitions = recognitions;
     });
   }
+
   // build method is run each time app needs to re-build the widget
   @override
   Widget build(BuildContext context) {
@@ -129,52 +154,69 @@ class _TfliteHomeState extends State<TfliteHome> {
 
     // when the app is first launch usually image width and height will be null
     // therefore for default value screen width and height is given
-    if(_imageWidth == null && _imageHeight == null) {
+    if (_imageWidth == null && _imageHeight == null) {
       finalW = size.width;
       finalH = size.height;
-    }else {
-
+    } else {
       // ratio width and ratio height will given ratio to
       // scale up or down the preview image and segmentation
-      double ratioW = size.width / _imageWidth;
-      double ratioH = size.height / _imageHeight;
+      double ratioW = size.width / _imageWidth!;
+      double ratioH = size.height / _imageHeight!;
 
       // final width and height after the ratio scaling is applied
-      finalW = _imageWidth * ratioW;
-      finalH = _imageHeight * ratioH;
+      finalW = _imageWidth! * ratioW;
+      finalH = _imageHeight! * ratioH;
     }
 
     List<Widget> stackChildren = [];
 
     // when busy load a circular progress indicator
-    if(_busy) {
-      stackChildren.add(Positioned(
-        top: 0,
-        left: 0,
-        child: Center(child: CircularProgressIndicator(),),
-      ));
+    if (_busy) {
+      stackChildren.add(
+        Positioned(
+          top: 0,
+          left: 0,
+          child: Center(
+            child: CircularProgressIndicator(),
+          ),
+        ),
+      );
     }
 
     // widget to show image preview, when preview not available default text is shown
-    stackChildren.add(Positioned(
-      top: 0.0,
-      left: 0.0,
-      width: finalW,
-      height: finalH,
-      child: _image == null ? Center(child: Text('Please Select an Image From Camera or Gallery'),): Image.file(_image, fit: BoxFit.fill,),
-    ));
+    stackChildren.add(
+      Positioned(
+        top: 0.0,
+        left: 0.0,
+        width: finalW,
+        height: finalH,
+        child: _image == null
+            ? Center(child: Text('Please Select an Image From Camera or Gallery'))
+            : Image.file(
+          _image!,
+          fit: BoxFit.fill,
+        ),
+      ),
+    );
 
     // widget to show segmentation preview, when segmentation not available default blank text is shown
-    stackChildren.add(Positioned(
-      top: 0,
-      left: 0,
-      width: finalW,
-      height: finalH,
-      child: Opacity(
-        opacity: 0.7,
-        child: _recognitions == null ? Center(child: Text(''),): Image.memory(_recognitions, fit: BoxFit.fill),
+    stackChildren.add(
+      Positioned(
+        top: 0,
+        left: 0,
+        width: finalW,
+        height: finalH,
+        child: Opacity(
+          opacity: 0.7,
+          child: _recognitions == null
+              ? Center(child: Text(''))
+              : Image.memory(
+            _recognitions,
+            fit: BoxFit.fill,
+          ),
+        ),
       ),
-    ));
+    );
 
     return Scaffold(
       appBar: AppBar(
@@ -183,7 +225,8 @@ class _TfliteHomeState extends State<TfliteHome> {
       ),
       floatingActionButton: Stack(
         children: <Widget>[
-          Padding(padding: EdgeInsets.all(10),
+          Padding(
+            padding: EdgeInsets.all(10),
             child: Align(
               alignment: Alignment.bottomCenter,
               child: FloatingActionButton(
@@ -194,7 +237,8 @@ class _TfliteHomeState extends State<TfliteHome> {
               ),
             ),
           ),
-          Padding(padding: EdgeInsets.all(10),
+          Padding(
+            padding: EdgeInsets.all(10),
             child: Align(
               alignment: Alignment.bottomRight,
               child: FloatingActionButton(
@@ -213,4 +257,3 @@ class _TfliteHomeState extends State<TfliteHome> {
     );
   }
 }
-
