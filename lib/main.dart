@@ -162,13 +162,20 @@ class _TfliteHomeState extends State<TfliteHome> {
 
   // モデルの出力を処理してセグメンテーションマスクを生成
   Future<Uint8List> processOutput(List output) async {
+    var outputData = output.reshape([257, 257, 21]);
     var mask = img.Image(width: 257, height: 257);
-
-    var outputData = output.reshape([257, 257]);
 
     for (int y = 0; y < 257; y++) {
       for (int x = 0; x < 257; x++) {
-        int label = outputData[y][x].toInt();
+        double maxScore = outputData[y][x][0];
+        int label = 0;
+        for (int c = 1; c < 21; c++) {
+          double score = outputData[y][x][c];
+          if (score > maxScore) {
+            maxScore = score;
+            label = c;
+          }
+        }
         if (label == 15) {
           // 赤色 (RGB: 255, 0, 0, Alpha: 255)
           mask.setPixel(x, y, getColor(255, 0, 0, 255));
