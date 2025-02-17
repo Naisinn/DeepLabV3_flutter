@@ -34,6 +34,7 @@ class _TfliteHomeState extends State<TfliteHome> {
   double? _imageWidth;
   double? _imageHeight;
   bool _busy = false;
+  String _errorMessage = ""; // エラーメッセージ用の変数
 
   Interpreter? _interpreter;
   img.Image? _segmentationMask;
@@ -68,83 +69,124 @@ class _TfliteHomeState extends State<TfliteHome> {
       // 出力テンソルの形状からクラス数を自動検出
       _numClasses = _interpreter!.getOutputTensor(0).shape.last;
       print('Detected num_classes: $_numClasses');
-    } on Exception catch (e) {
-      print('モデルの読み込みに失敗しました。');
-      print(e);
+    } catch (e, stacktrace) {
+      String errorDetails = "モデルの読み込みに失敗しました: $e\n$stacktrace";
+      print(errorDetails);
+      setState(() {
+        _errorMessage = errorDetails;
+      });
     }
   }
 
   // ギャラリーから画像を選択
   selectFromImagePicker() async {
-    var imagePicker = ImagePicker();
-    var pickedFile = await imagePicker.pickImage(source: ImageSource.gallery);
-    if (pickedFile == null) return;
-    setState(() {
-      _busy = true;
-    });
-    predictImage(File(pickedFile.path));
+    try {
+      var imagePicker = ImagePicker();
+      var pickedFile = await imagePicker.pickImage(source: ImageSource.gallery);
+      if (pickedFile == null) return;
+      setState(() {
+        _busy = true;
+        _errorMessage = "";
+      });
+      await predictImage(File(pickedFile.path));
+    } catch (e, stacktrace) {
+      String errorDetails = "ギャラリーからの画像選択中にエラーが発生しました: $e\n$stacktrace";
+      print(errorDetails);
+      setState(() {
+        _errorMessage = errorDetails;
+        _busy = false;
+      });
+    }
   }
 
   // カメラから画像を撮影
   selectFromCamera() async {
-    var imagePicker = ImagePicker();
-    var pickedFile = await imagePicker.pickImage(source: ImageSource.camera);
-    if (pickedFile == null) return;
-    setState(() {
-      _busy = true;
-    });
-    predictImage(File(pickedFile.path));
+    try {
+      var imagePicker = ImagePicker();
+      var pickedFile = await imagePicker.pickImage(source: ImageSource.camera);
+      if (pickedFile == null) return;
+      setState(() {
+        _busy = true;
+        _errorMessage = "";
+      });
+      await predictImage(File(pickedFile.path));
+    } catch (e, stacktrace) {
+      String errorDetails = "カメラからの画像撮影中にエラーが発生しました: $e\n$stacktrace";
+      print(errorDetails);
+      setState(() {
+        _errorMessage = errorDetails;
+        _busy = false;
+      });
+    }
   }
 
   // 画像の予測を行う
   predictImage(File image) async {
-    // 画像の幅と高さを取得
-    FileImage(image).resolve(ImageConfiguration()).addListener(
-      ImageStreamListener((ImageInfo info, bool _) {
-        setState(() {
-          _imageWidth = info.image.width.toDouble();
-          _imageHeight = info.image.height.toDouble();
-        });
-      }),
-    );
+    try {
+      // 画像の幅と高さを取得
+      FileImage(image).resolve(ImageConfiguration()).addListener(
+        ImageStreamListener((ImageInfo info, bool _) {
+          setState(() {
+            _imageWidth = info.image.width.toDouble();
+            _imageHeight = info.image.height.toDouble();
+          });
+        }),
+      );
 
-    if (_model == dlv3) {
-      await dlv(image);
+      if (_model == dlv3) {
+        await dlv(image);
+      }
+
+      setState(() {
+        _image = image;
+        _busy = false;
+      });
+    } catch (e, stacktrace) {
+      String errorDetails = "画像の予測中にエラーが発生しました: $e\n$stacktrace";
+      print(errorDetails);
+      setState(() {
+        _errorMessage = errorDetails;
+        _busy = false;
+      });
     }
-
-    setState(() {
-      _image = image;
-      _busy = false;
-    });
   }
 
   // DeepLabv3でセグメンテーションを実行
   dlv(File imageFile) async {
-    // 画像を読み込み
-    var inputImage = img.decodeImage(await imageFile.readAsBytes());
-    if (inputImage == null) {
-      print('画像のデコードに失敗しました。');
-      return;
+    try {
+      // 画像を読み込み
+      var imageBytes = await imageFile.readAsBytes();
+      var inputImage = img.decodeImage(imageBytes);
+      if (inputImage == null) {
+        throw Exception("画像のデコードに失敗しました。");
+      }
+
+      // 画像をリサイズ
+      var resizedImage = img.copyResize(inputImage, width: 257, height: 257);
+
+      // 画像をモデルの入力形式に変換
+      var inputTensor = imageToByteListFloat32(resizedImage);
+
+      // 入力と出力のバッファを準備
+      var output = List.filled(1 * 257 * 257 * _numClasses, 0)
+          .reshape([1, 257, 257, _numClasses]);
+
+      // 推論を実行
+      _interpreter?.run(inputTensor, output);
+
+      // セグメンテーションマスクを生成
+      var maskBytes = await processOutput(output);
+
+      setState(() {
+        _segmentationMask = img.decodeImage(maskBytes);
+      });
+    } catch (e, stacktrace) {
+      String errorDetails = "DeepLabv3の処理中にエラーが発生しました: $e\n$stacktrace";
+      print(errorDetails);
+      setState(() {
+        _errorMessage = errorDetails;
+      });
     }
-
-    // 画像をリサイズ
-    var resizedImage = img.copyResize(inputImage, width: 257, height: 257);
-
-    // 画像をモデルの入力形式に変換
-    var inputTensor = imageToByteListFloat32(resizedImage);
-
-    // 入力と出力のバッファを準備
-    var output = List.filled(1 * 257 * 257 * _numClasses, 0).reshape([1, 257, 257, _numClasses]);
-
-    // 推論を実行
-    _interpreter?.run(inputTensor, output);
-
-    // セグメンテーションマスクを生成
-    var maskBytes = await processOutput(output);
-
-    setState(() {
-      _segmentationMask = img.decodeImage(maskBytes);
-    });
   }
 
   // 画像をFloat32のバイトリストに変換
@@ -153,45 +195,64 @@ class _TfliteHomeState extends State<TfliteHome> {
     var pixels = buffer.asFloat32List();
     int pixelIndex = 0;
 
-    for (var y = 0; y < 257; y++) {
-      for (var x = 0; x < 257; x++) {
-        var pixel = image.getPixel(x, y);
-        pixels[pixelIndex++] = (getRed(pixel) - 127.5) / 127.5;
-        pixels[pixelIndex++] = (getGreen(pixel) - 127.5) / 127.5;
-        pixels[pixelIndex++] = (getBlue(pixel) - 127.5) / 127.5;
+    try {
+      for (var y = 0; y < 257; y++) {
+        for (var x = 0; x < 257; x++) {
+          var pixel = image.getPixel(x, y);
+          pixels[pixelIndex++] = (getRed(pixel) - 127.5) / 127.5;
+          pixels[pixelIndex++] = (getGreen(pixel) - 127.5) / 127.5;
+          pixels[pixelIndex++] = (getBlue(pixel) - 127.5) / 127.5;
+        }
       }
+    } catch (e, stacktrace) {
+      String errorDetails =
+          "画像をFloat32のバイトリストに変換中にエラーが発生しました: $e\n$stacktrace";
+      print(errorDetails);
+      setState(() {
+        _errorMessage = errorDetails;
+      });
     }
     return buffer.asUint8List();
   }
 
   // モデルの出力を処理してセグメンテーションマスクを生成
   Future<Uint8List> processOutput(List output) async {
-    var outputData = output.reshape([257, 257, _numClasses]);
-    var mask = img.Image(width: 257, height: 257);
+    try {
+      var outputData = output.reshape([257, 257, _numClasses]);
+      var mask = img.Image(width: 257, height: 257);
 
-    for (int y = 0; y < 257; y++) {
-      for (int x = 0; x < 257; x++) {
-        double maxScore = outputData[y][x][0];
-        int label = 0;
-        for (int c = 1; c < _numClasses; c++) {
-          double score = outputData[y][x][c];
-          if (score > maxScore) {
-            maxScore = score;
-            label = c;
+      for (int y = 0; y < 257; y++) {
+        for (int x = 0; x < 257; x++) {
+          double maxScore = outputData[y][x][0];
+          int label = 0;
+          for (int c = 1; c < _numClasses; c++) {
+            double score = outputData[y][x][c];
+            if (score > maxScore) {
+              maxScore = score;
+              label = c;
+            }
+          }
+          if (label == 15) {
+            // 赤色 (RGB: 255, 0, 0, Alpha: 255)
+            mask.setPixel(x, y, getColor(255, 0, 0, 255));
+          } else {
+            // 透明 (RGB: 0, 0, 0, Alpha: 0)
+            mask.setPixel(x, y, getColor(0, 0, 0, 0));
           }
         }
-        if (label == 15) {
-          // 赤色 (RGB: 255, 0, 0, Alpha: 255)
-          mask.setPixel(x, y, getColor(255, 0, 0, 255));
-        } else {
-          // 透明 (RGB: 0, 0, 0, Alpha: 0)
-          mask.setPixel(x, y, getColor(0, 0, 0, 0));
-        }
       }
-    }
 
-    // 画像をPNG形式にエンコード
-    return img.encodePng(mask);
+      // 画像をPNG形式にエンコード
+      return img.encodePng(mask);
+    } catch (e, stacktrace) {
+      String errorDetails =
+          "モデル出力の処理中にエラーが発生しました: $e\n$stacktrace";
+      print(errorDetails);
+      setState(() {
+        _errorMessage = errorDetails;
+      });
+      rethrow;
+    }
   }
 
   @override
@@ -260,6 +321,28 @@ class _TfliteHomeState extends State<TfliteHome> {
             child: Image.memory(
               img.encodePng(_segmentationMask!),
               fit: BoxFit.fill,
+            ),
+          ),
+        ),
+      );
+    }
+
+    // エラーメッセージの表示
+    if (_errorMessage.isNotEmpty) {
+      stackChildren.add(
+        Positioned(
+          bottom: 20,
+          left: 10,
+          right: 10,
+          child: Container(
+            padding: EdgeInsets.all(8),
+            color: Colors.black54,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Text(
+                _errorMessage,
+                style: TextStyle(color: Colors.white, fontSize: 12),
+              ),
             ),
           ),
         ),
