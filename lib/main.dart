@@ -49,10 +49,15 @@ class _TfliteHomeState extends State<TfliteHome> {
   }
 
   // 色チャンネルを抽出するヘルパー関数
-  int getRed(int color) => (color >> 16) & 0xFF;
-  int getGreen(int color) => (color >> 8) & 0xFF;
-  int getBlue(int color) => color & 0xFF;
-  int getAlpha(int color) => (color >> 24) & 0xFF;
+  int getRed(color) => color is int ? (color >> 16) & 0xFF : color.r;
+  int getGreen(color) => color is int ? (color >> 8) & 0xFF : color.g;
+  int getBlue(color) => color is int ? color & 0xFF : color.b;
+  int getAlpha(color) => color is int ? (color >> 24) & 0xFF : color.a;
+
+  // ARGB の img.Color を生成する関数 (修正箇所)
+  img.Color getColor(int r, int g, int b, [int a = 255]) {
+    return img.ColorInt8.rgba(r, g, b, a);
+  }
 
   // モデルの読み込み
   Future<void> loadModel() async {
@@ -157,7 +162,7 @@ class _TfliteHomeState extends State<TfliteHome> {
 
   // モデルの出力を処理してセグメンテーションマスクを生成
   Future<Uint8List> processOutput(List output) async {
-    var mask = img.Image(width: 257, height: 257); // 名前付き引数を使用
+    var mask = img.Image(width: 257, height: 257);
 
     var outputData = output.reshape([257, 257]);
 
@@ -166,10 +171,10 @@ class _TfliteHomeState extends State<TfliteHome> {
         int label = outputData[y][x].toInt();
         if (label == 15) {
           // 赤色 (RGB: 255, 0, 0, Alpha: 255)
-          mask.setPixelRgba(x, y, 255, 0, 0, 255);
+          mask.setPixel(x, y, getColor(255, 0, 0, 255));
         } else {
           // 透明 (RGB: 0, 0, 0, Alpha: 0)
-          mask.setPixelRgba(x, y, 0, 0, 0, 0);
+          mask.setPixel(x, y, getColor(0, 0, 0, 0));
         }
       }
     }
