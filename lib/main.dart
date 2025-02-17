@@ -151,7 +151,7 @@ class _TfliteHomeState extends State<TfliteHome> {
     }
   }
 
-  // DeepLabv3でセグメンテーションを実行
+  // DeepLabv3でセグメンテーションを実行 (入力形状を動的に反映)
   dlv(File imageFile) async {
     try {
       // 画像を読み込み
@@ -161,33 +161,49 @@ class _TfliteHomeState extends State<TfliteHome> {
         throw Exception("画像のデコードに失敗しました。");
       }
 
-      // 画像をリサイズ
-      var resizedImage = img.copyResize(inputImage, width: 257, height: 257);
-
-      // 入力テンソルの作成：モデルの入力型に応じて変換
+      // --- モデルが期待する入力形状を取得 ---
       var inputTensorInfo = _interpreter!.getInputTensor(0);
+      var inputShape = inputTensorInfo.shape; // 例: [1, 321, 321, 3]
+      int batch      = inputShape[0];
+      int inHeight   = inputShape[1];
+      int inWidth    = inputShape[2];
+      int inChannels = inputShape[3];
+
+      // 画像をリサイズ (モデルに合わせる)
+      var resizedImage = img.copyResize(
+        inputImage,
+        width: inWidth,
+        height: inHeight,
+      );
+
+      // 入力テンソルの型判定 (Float32 / Uint8)
       dynamic inputTensor;
       if (inputTensorInfo.type.toString().toLowerCase().contains('float32')) {
-        // --- ここで reshape して「[1, 257, 257, 3]」にする ---
-        Float32List buffer = imageToByteListFloat32(resizedImage);
-        inputTensor = buffer.reshape([1, 257, 257, 3]);
+        Float32List buffer = imageToByteListFloat32(resizedImage, inWidth, inHeight);
+        // [batch, inHeight, inWidth, inChannels] に reshape
+        inputTensor = buffer.reshape([batch, inHeight, inWidth, inChannels]);
       } else if (inputTensorInfo.type.toString().toLowerCase().contains('uint8')) {
-        // --- 同様に reshape ---
-        Uint8List buffer = imageToByteListUint8(resizedImage);
-        inputTensor = buffer.reshape([1, 257, 257, 3]);
+        Uint8List buffer = imageToByteListUint8(resizedImage, inWidth, inHeight);
+        inputTensor = buffer.reshape([batch, inHeight, inWidth, inChannels]);
       } else {
         throw Exception("Unsupported input tensor type: ${inputTensorInfo.type}");
       }
 
-      // 出力テンソルの作成：モデルの出力型に応じて作成
+      // --- 出力形状を取得して、対応するバッファを作成 ---
       var outputTensorInfo = _interpreter!.getOutputTensor(0);
+      var outputShape = outputTensorInfo.shape; // 例: [1, 321, 321, 55]
+      int outBatch    = outputShape[0];
+      int outHeight   = outputShape[1];
+      int outWidth    = outputShape[2];
+      int outChannels = outputShape[3];
+
       dynamic output;
       if (outputTensorInfo.type.toString().toLowerCase().contains('float32')) {
-        output = Float32List(1 * 257 * 257 * _numClasses)
-            .reshape([1, 257, 257, _numClasses]);
+        output = Float32List(outBatch * outHeight * outWidth * outChannels)
+            .reshape([outBatch, outHeight, outWidth, outChannels]);
       } else if (outputTensorInfo.type.toString().toLowerCase().contains('uint8')) {
-        output = Uint8List(1 * 257 * 257 * _numClasses)
-            .reshape([1, 257, 257, _numClasses]);
+        output = Uint8List(outBatch * outHeight * outWidth * outChannels)
+            .reshape([outBatch, outHeight, outWidth, outChannels]);
       } else {
         throw Exception("Unsupported output tensor type: ${outputTensorInfo.type}");
       }
@@ -196,6 +212,7 @@ class _TfliteHomeState extends State<TfliteHome> {
       _interpreter?.run(inputTensor, output);
 
       // セグメンテーションマスクを生成
+      // ここでは、processOutput でさらに [outHeight, outWidth, outChannels] へ reshape
       var maskBytes = await processOutput(output);
 
       setState(() {
@@ -211,14 +228,15 @@ class _TfliteHomeState extends State<TfliteHome> {
   }
 
   // 画像をFloat32のバイトリストに変換
-  Float32List imageToByteListFloat32(img.Image image) {
-    var buffer = Float32List(1 * 257 * 257 * 3).buffer;
+  // 幅・高さを引数にしておく (念のため)
+  Float32List imageToByteListFloat32(img.Image image, int inWidth, int inHeight) {
+    var buffer = Float32List(inWidth * inHeight * 3).buffer;
     var pixels = buffer.asFloat32List();
     int pixelIndex = 0;
 
     try {
-      for (var y = 0; y < 257; y++) {
-        for (var x = 0; x < 257; x++) {
+      for (var y = 0; y < inHeight; y++) {
+        for (var x = 0; x < inWidth; x++) {
           var pixel = image.getPixel(x, y);
           pixels[pixelIndex++] = (getRed(pixel) - 127.5) / 127.5;
           pixels[pixelIndex++] = (getGreen(pixel) - 127.5) / 127.5;
@@ -236,13 +254,13 @@ class _TfliteHomeState extends State<TfliteHome> {
     return buffer.asFloat32List();
   }
 
-  // 画像をUint8のバイトリストに変換する関数（deeplabv3_257_mv_gpu.tflite 用）
-  Uint8List imageToByteListUint8(img.Image image) {
-    var convertedBytes = Uint8List(1 * 257 * 257 * 3);
+  // 画像をUint8のバイトリストに変換する関数
+  Uint8List imageToByteListUint8(img.Image image, int inWidth, int inHeight) {
+    var convertedBytes = Uint8List(inWidth * inHeight * 3);
     int pixelIndex = 0;
     try {
-      for (var y = 0; y < 257; y++) {
-        for (var x = 0; x < 257; x++) {
+      for (var y = 0; y < inHeight; y++) {
+        for (var x = 0; x < inWidth; x++) {
           var pixel = image.getPixel(x, y);
           convertedBytes[pixelIndex++] = getRed(pixel);
           convertedBytes[pixelIndex++] = getGreen(pixel);
@@ -263,14 +281,25 @@ class _TfliteHomeState extends State<TfliteHome> {
   // モデルの出力を処理してセグメンテーションマスクを生成
   Future<Uint8List> processOutput(dynamic output) async {
     try {
-      var outputData = output.reshape([257, 257, _numClasses]);
-      var mask = img.Image(width: 257, height: 257);
+      // output.shape: [batch, outHeight, outWidth, outChannels]
+      // まず reshape して [outHeight, outWidth, outChannels] にする
+      var shape = output.shape;
+      int outBatch    = shape[0];
+      int outHeight   = shape[1];
+      int outWidth    = shape[2];
+      int outChannels = shape[3];
 
-      for (int y = 0; y < 257; y++) {
-        for (int x = 0; x < 257; x++) {
+      // 今回バッチは 1 前提とみなす
+      assert(outBatch == 1, "Batch size must be 1 for this model.");
+      var outputData = output.reshape([outHeight, outWidth, outChannels]);
+
+      var mask = img.Image(width: outWidth, height: outHeight);
+
+      for (int y = 0; y < outHeight; y++) {
+        for (int x = 0; x < outWidth; x++) {
           double maxScore = outputData[y][x][0].toDouble();
           int label = 0;
-          for (int c = 1; c < _numClasses; c++) {
+          for (int c = 1; c < outChannels; c++) {
             double score = outputData[y][x][c].toDouble();
             if (score > maxScore) {
               maxScore = score;
