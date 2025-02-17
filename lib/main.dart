@@ -168,9 +168,13 @@ class _TfliteHomeState extends State<TfliteHome> {
       var inputTensorInfo = _interpreter!.getInputTensor(0);
       dynamic inputTensor;
       if (inputTensorInfo.type.toString().toLowerCase().contains('float32')) {
-        inputTensor = imageToByteListFloat32(resizedImage);
+        // --- ここで reshape して「[1, 257, 257, 3]」にする ---
+        Float32List buffer = imageToByteListFloat32(resizedImage);
+        inputTensor = buffer.reshape([1, 257, 257, 3]);
       } else if (inputTensorInfo.type.toString().toLowerCase().contains('uint8')) {
-        inputTensor = imageToByteListUint8(resizedImage);
+        // --- 同様に reshape ---
+        Uint8List buffer = imageToByteListUint8(resizedImage);
+        inputTensor = buffer.reshape([1, 257, 257, 3]);
       } else {
         throw Exception("Unsupported input tensor type: ${inputTensorInfo.type}");
       }
@@ -207,7 +211,6 @@ class _TfliteHomeState extends State<TfliteHome> {
   }
 
   // 画像をFloat32のバイトリストに変換
-  // 修正: 戻り値の型をFloat32Listに変更
   Float32List imageToByteListFloat32(img.Image image) {
     var buffer = Float32List(1 * 257 * 257 * 3).buffer;
     var pixels = buffer.asFloat32List();
@@ -312,7 +315,6 @@ class _TfliteHomeState extends State<TfliteHome> {
     } else {
       double ratioW = size.width / _imageWidth!;
       double ratioH = size.height / _imageHeight!;
-
       finalW = _imageWidth! * ratioW;
       finalH = _imageHeight! * ratioH;
     }
