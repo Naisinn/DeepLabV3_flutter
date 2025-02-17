@@ -36,7 +36,7 @@ android {
     defaultConfig {
         applicationId "com.tfliteflutteryolokshitizninja.flutter_tflite"
         minSdkVersion 27
-        targetSdkVersion 34
+        targetSdkVersion 35
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
