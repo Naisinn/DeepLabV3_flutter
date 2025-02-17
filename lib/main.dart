@@ -11,6 +11,13 @@ void main() => runApp(MyApp());
 const String dlv3 = 'DeepLabv3';
 late int _numClasses; // 自動検出されるクラス数
 
+// 使用可能なモデルファイル名（assets/tflite フォルダ内の .tflite ファイル名）
+final List<String> availableModels = [
+  "Audi_20250208-223050.tflite",
+  "deeplabv3_257_mv_gpu.tflite",
+  // 必要に応じて他のモデルファイルも追加してください
+];
+
 class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -27,6 +34,8 @@ class TfliteHome extends StatefulWidget {
 }
 
 class _TfliteHomeState extends State<TfliteHome> {
+  // 現在選択中のモデルパス（assets/tflite 内）
+  String _modelPath = availableModels[0];
   String _model = dlv3;
 
   File? _image;
@@ -89,11 +98,11 @@ class _TfliteHomeState extends State<TfliteHome> {
     return getColor(ir, ig, ib, 255);
   }
 
-  // モデルの読み込み
+  // モデルの読み込み（assets/tflite/ 内の選択中のモデルファイルを読み込む）
   Future<void> loadModel() async {
     try {
       // TFLiteモデルをロード
-      _interpreter = await Interpreter.fromAsset('assets/tflite/Audi_20250208-223050.tflite');
+      _interpreter = await Interpreter.fromAsset('assets/tflite/$_modelPath');
       // 出力テンソルの形状からクラス数を自動検出
       _numClasses = _interpreter!.getOutputTensor(0).shape.last;
       print('Detected num_classes: $_numClasses');
@@ -448,6 +457,36 @@ class _TfliteHomeState extends State<TfliteHome> {
       appBar: AppBar(
         title: Text('オンデバイス画像セグメンテーション'),
         backgroundColor: Colors.redAccent,
+        actions: [
+          // モデル選択用のドロップダウン
+          DropdownButton<String>(
+            value: _modelPath,
+            dropdownColor: Colors.white,
+            icon: Icon(Icons.arrow_drop_down, color: Colors.white),
+            underline: Container(),
+            onChanged: (String? newValue) async {
+              if (newValue != null) {
+                setState(() {
+                  _modelPath = newValue;
+                  _busy = true;
+                  _segmentationMask = null;
+                  _image = null;
+                });
+                await loadModel();
+                setState(() {
+                  _busy = false;
+                });
+              }
+            },
+            items: availableModels.map<DropdownMenuItem<String>>((String value) {
+              return DropdownMenuItem<String>(
+                value: value,
+                child: Text(value, style: TextStyle(color: Colors.black)),
+              );
+            }).toList(),
+          ),
+          SizedBox(width: 8),
+        ],
       ),
       floatingActionButton: Stack(
         children: <Widget>[
