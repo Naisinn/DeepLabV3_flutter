@@ -9,6 +9,7 @@ void main() => runApp(MyApp());
 
 // 定数の定義
 const String dlv3 = 'DeepLabv3';
+late int _numClasses; // 自動検出されるクラス数
 
 class MyApp extends StatelessWidget {
   @override
@@ -63,7 +64,10 @@ class _TfliteHomeState extends State<TfliteHome> {
   Future<void> loadModel() async {
     try {
       // TFLiteモデルをロード
-      _interpreter = await Interpreter.fromAsset('assets/tflite/deeplabv3_257_mv_gpu.tflite');
+      _interpreter = await Interpreter.fromAsset('assets/tflite/Audi_20250208-223050.tflite');
+      // 出力テンソルの形状からクラス数を自動検出
+      _numClasses = _interpreter!.getOutputTensor(0).shape.last;
+      print('Detected num_classes: $_numClasses');
     } on Exception catch (e) {
       print('モデルの読み込みに失敗しました。');
       print(e);
@@ -130,7 +134,7 @@ class _TfliteHomeState extends State<TfliteHome> {
     var inputTensor = imageToByteListFloat32(resizedImage);
 
     // 入力と出力のバッファを準備
-    var output = List.filled(1 * 257 * 257 * 21, 0).reshape([1, 257, 257, 21]);
+    var output = List.filled(1 * 257 * 257 * _numClasses, 0).reshape([1, 257, 257, _numClasses]);
 
     // 推論を実行
     _interpreter?.run(inputTensor, output);
@@ -162,14 +166,14 @@ class _TfliteHomeState extends State<TfliteHome> {
 
   // モデルの出力を処理してセグメンテーションマスクを生成
   Future<Uint8List> processOutput(List output) async {
-    var outputData = output.reshape([257, 257, 21]);
+    var outputData = output.reshape([257, 257, _numClasses]);
     var mask = img.Image(width: 257, height: 257);
 
     for (int y = 0; y < 257; y++) {
       for (int x = 0; x < 257; x++) {
         double maxScore = outputData[y][x][0];
         int label = 0;
-        for (int c = 1; c < 21; c++) {
+        for (int c = 1; c < _numClasses; c++) {
           double score = outputData[y][x][c];
           if (score > maxScore) {
             maxScore = score;
