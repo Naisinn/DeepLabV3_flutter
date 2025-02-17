@@ -192,10 +192,11 @@ class _TfliteHomeState extends State<TfliteHome> {
       // --- 出力形状を取得して、対応するバッファを作成 ---
       var outputTensorInfo = _interpreter!.getOutputTensor(0);
       var outputShape = outputTensorInfo.shape; // 例: [1, 321, 321, 55]
-      int outBatch    = outputShape[0];
+      int outBatch    = outputShape[0]; // ※ outBatch は使わないが、assertでチェックする
       int outHeight   = outputShape[1];
       int outWidth    = outputShape[2];
       int outChannels = outputShape[3];
+      assert(outBatch == 1, "Batch size must be 1 for this model.");
 
       dynamic output;
       if (outputTensorInfo.type.toString().toLowerCase().contains('float32')) {
@@ -212,7 +213,6 @@ class _TfliteHomeState extends State<TfliteHome> {
       _interpreter?.run(inputTensor, output);
 
       // セグメンテーションマスクを生成
-      // ここでは、processOutput でさらに [outHeight, outWidth, outChannels] へ reshape
       var maskBytes = await processOutput(output);
 
       setState(() {
@@ -281,26 +281,27 @@ class _TfliteHomeState extends State<TfliteHome> {
   // モデルの出力を処理してセグメンテーションマスクを生成
   Future<Uint8List> processOutput(dynamic output) async {
     try {
-      // output.shape: [batch, outHeight, outWidth, outChannels]
-      // まず reshape して [outHeight, outWidth, outChannels] にする
-      var shape = output.shape;
-      int outBatch    = shape[0];
-      int outHeight   = shape[1];
-      int outWidth    = shape[2];
-      int outChannels = shape[3];
-
-      // 今回バッチは 1 前提とみなす
-      assert(outBatch == 1, "Batch size must be 1 for this model.");
-      var outputData = output.reshape([outHeight, outWidth, outChannels]);
+      // output は [batch, outHeight, outWidth, outChannels] の 4 次元リストであるが、
+      // バッチは 1 と仮定し、最初の要素を取り出す
+      var outputData;
+      if (output is List && output.length == 1) {
+        outputData = output[0];
+      } else {
+        outputData = output;
+      }
+      // 出力の次元を出力データから取得
+      int outHeight = outputData.length;
+      int outWidth = outputData[0].length;
+      int outChannels = outputData[0][0].length;
 
       var mask = img.Image(width: outWidth, height: outHeight);
 
       for (int y = 0; y < outHeight; y++) {
         for (int x = 0; x < outWidth; x++) {
-          double maxScore = outputData[y][x][0].toDouble();
+          double maxScore = (outputData[y][x][0] as num).toDouble();
           int label = 0;
           for (int c = 1; c < outChannels; c++) {
-            double score = outputData[y][x][c].toDouble();
+            double score = (outputData[y][x][c] as num).toDouble();
             if (score > maxScore) {
               maxScore = score;
               label = c;
@@ -315,8 +316,6 @@ class _TfliteHomeState extends State<TfliteHome> {
           }
         }
       }
-
-      // 画像をPNG形式にエンコード
       return img.encodePng(mask);
     } catch (e, stacktrace) {
       String errorDetails =
