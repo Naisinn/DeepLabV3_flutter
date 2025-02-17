@@ -61,6 +61,34 @@ class _TfliteHomeState extends State<TfliteHome> {
     return img.ColorInt8.rgba(r, g, b, a);
   }
 
+  // 追加: ラベルに応じた色 (HSVの色相を均等に割り当て)
+  img.Color getColorForLabel(int label, int numClasses) {
+    // 色相 (Hue) を 0～360 度の範囲で割り当てる
+    double hue = 360.0 * label / numClasses;
+    // HSV (Hue, Saturation, Value) で Saturation=1.0, Value=1.0 とする
+    double c = 1.0;
+    double x = c * (1 - (((hue / 60.0) % 2) - 1).abs());
+    double m = 0.0;
+    double r, g, b;
+    if (hue < 60) {
+      r = c; g = x; b = 0;
+    } else if (hue < 120) {
+      r = x; g = c; b = 0;
+    } else if (hue < 180) {
+      r = 0; g = c; b = x;
+    } else if (hue < 240) {
+      r = 0; g = x; b = c;
+    } else if (hue < 300) {
+      r = x; g = 0; b = c;
+    } else {
+      r = c; g = 0; b = x;
+    }
+    int ir = ((r + m) * 255).round();
+    int ig = ((g + m) * 255).round();
+    int ib = ((b + m) * 255).round();
+    return getColor(ir, ig, ib, 255);
+  }
+
   // モデルの読み込み
   Future<void> loadModel() async {
     try {
@@ -192,7 +220,7 @@ class _TfliteHomeState extends State<TfliteHome> {
       // --- 出力形状を取得して、対応するバッファを作成 ---
       var outputTensorInfo = _interpreter!.getOutputTensor(0);
       var outputShape = outputTensorInfo.shape; // 例: [1, 321, 321, 55]
-      int outBatch    = outputShape[0]; // ※ outBatch は使わないが、assertでチェックする
+      int outBatch    = outputShape[0];
       int outHeight   = outputShape[1];
       int outWidth    = outputShape[2];
       int outChannels = outputShape[3];
@@ -307,13 +335,8 @@ class _TfliteHomeState extends State<TfliteHome> {
               label = c;
             }
           }
-          if (label == 15) {
-            // 赤色 (RGB: 255, 0, 0, Alpha: 255)
-            mask.setPixel(x, y, getColor(255, 0, 0, 255));
-          } else {
-            // 透明 (RGB: 0, 0, 0, Alpha: 0)
-            mask.setPixel(x, y, getColor(0, 0, 0, 0));
-          }
+          // 各ラベルに対して異なる色を塗る
+          mask.setPixel(x, y, getColorForLabel(label, outChannels));
         }
       }
       return img.encodePng(mask);
