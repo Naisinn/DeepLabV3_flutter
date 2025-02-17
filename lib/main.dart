@@ -164,12 +164,29 @@ class _TfliteHomeState extends State<TfliteHome> {
       // 画像をリサイズ
       var resizedImage = img.copyResize(inputImage, width: 257, height: 257);
 
-      // 画像をモデルの入力形式に変換
-      var inputTensor = imageToByteListFloat32(resizedImage);
+      // 入力テンソルの作成：モデルの入力型に応じて変換
+      var inputTensorInfo = _interpreter!.getInputTensor(0);
+      dynamic inputTensor;
+      if (inputTensorInfo.type.toString().toLowerCase().contains('float32')) {
+        inputTensor = imageToByteListFloat32(resizedImage);
+      } else if (inputTensorInfo.type.toString().toLowerCase().contains('uint8')) {
+        inputTensor = imageToByteListUint8(resizedImage);
+      } else {
+        throw Exception("Unsupported input tensor type: ${inputTensorInfo.type}");
+      }
 
-      // 入力と出力のバッファを準備
-      var output = List.filled(1 * 257 * 257 * _numClasses, 0)
-          .reshape([1, 257, 257, _numClasses]);
+      // 出力テンソルの作成：モデルの出力型に応じて作成
+      var outputTensorInfo = _interpreter!.getOutputTensor(0);
+      dynamic output;
+      if (outputTensorInfo.type.toString().toLowerCase().contains('float32')) {
+        output = Float32List(1 * 257 * 257 * _numClasses)
+            .reshape([1, 257, 257, _numClasses]);
+      } else if (outputTensorInfo.type.toString().toLowerCase().contains('uint8')) {
+        output = Uint8List(1 * 257 * 257 * _numClasses)
+            .reshape([1, 257, 257, _numClasses]);
+      } else {
+        throw Exception("Unsupported output tensor type: ${outputTensorInfo.type}");
+      }
 
       // 推論を実行
       _interpreter?.run(inputTensor, output);
@@ -190,7 +207,8 @@ class _TfliteHomeState extends State<TfliteHome> {
   }
 
   // 画像をFloat32のバイトリストに変換
-  Uint8List imageToByteListFloat32(img.Image image) {
+  // 修正: 戻り値の型をFloat32Listに変更
+  Float32List imageToByteListFloat32(img.Image image) {
     var buffer = Float32List(1 * 257 * 257 * 3).buffer;
     var pixels = buffer.asFloat32List();
     int pixelIndex = 0;
@@ -212,21 +230,45 @@ class _TfliteHomeState extends State<TfliteHome> {
         _errorMessage = errorDetails;
       });
     }
-    return buffer.asUint8List();
+    return buffer.asFloat32List();
+  }
+
+  // 画像をUint8のバイトリストに変換する関数（deeplabv3_257_mv_gpu.tflite 用）
+  Uint8List imageToByteListUint8(img.Image image) {
+    var convertedBytes = Uint8List(1 * 257 * 257 * 3);
+    int pixelIndex = 0;
+    try {
+      for (var y = 0; y < 257; y++) {
+        for (var x = 0; x < 257; x++) {
+          var pixel = image.getPixel(x, y);
+          convertedBytes[pixelIndex++] = getRed(pixel);
+          convertedBytes[pixelIndex++] = getGreen(pixel);
+          convertedBytes[pixelIndex++] = getBlue(pixel);
+        }
+      }
+    } catch (e, stacktrace) {
+      String errorDetails =
+          "画像をUint8のバイトリストに変換中にエラーが発生しました: $e\n$stacktrace";
+      print(errorDetails);
+      setState(() {
+        _errorMessage = errorDetails;
+      });
+    }
+    return convertedBytes;
   }
 
   // モデルの出力を処理してセグメンテーションマスクを生成
-  Future<Uint8List> processOutput(List output) async {
+  Future<Uint8List> processOutput(dynamic output) async {
     try {
       var outputData = output.reshape([257, 257, _numClasses]);
       var mask = img.Image(width: 257, height: 257);
 
       for (int y = 0; y < 257; y++) {
         for (int x = 0; x < 257; x++) {
-          double maxScore = outputData[y][x][0];
+          double maxScore = outputData[y][x][0].toDouble();
           int label = 0;
           for (int c = 1; c < _numClasses; c++) {
-            double score = outputData[y][x][c];
+            double score = outputData[y][x][c].toDouble();
             if (score > maxScore) {
               maxScore = score;
               label = c;
