@@ -130,7 +130,7 @@ class _TfliteHomeState extends State<TfliteHome> {
     var inputTensor = imageToByteListFloat32(resizedImage);
 
     // 入力と出力のバッファを準備
-    var output = List.filled(1 * 257 * 257, 0).reshape([1, 257, 257]);
+    var output = List.filled(1 * 257 * 257 * 21, 0).reshape([1, 257, 257, 21]);
 
     // 推論を実行
     _interpreter?.run(inputTensor, output);

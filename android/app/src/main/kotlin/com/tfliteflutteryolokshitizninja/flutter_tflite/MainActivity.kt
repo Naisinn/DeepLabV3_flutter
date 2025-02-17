@@ -1,4 +1,4 @@
-package com.tfliteflutteryolokshitizninja.flutter_tflite
+package com.nanaki_naisinn.deelpabv3_flutter
 
 import io.flutter.embedding.android.FlutterActivity
 
