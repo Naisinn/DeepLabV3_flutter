@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:convert'; // 追加
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // 追加
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:image/image.dart' as img;
@@ -12,11 +14,19 @@ const String dlv3 = 'DeepLabv3';
 late int _numClasses; // 自動検出されるクラス数
 
 // 使用可能なモデルファイル名（assets/tflite フォルダ内の .tflite ファイル名）
-final List<String> availableModels = [
-  "Audi_20250208-223050.tflite",
-  "deeplabv3_257_mv_gpu.tflite",
-  // 必要に応じて他のモデルファイルも追加してください
-];
+// ↓ここを空リストに変更し、実行時に自動取得するようにする
+final List<String> availableModels = [];
+
+// ↓ここから新規追加: assets/tflite 配下の .tflite をすべて取得する関数
+Future<List<String>> _discoverTfliteModels() async {
+  final manifestContent = await rootBundle.loadString('AssetManifest.json');
+  final Map<String, dynamic> manifestMap = json.decode(manifestContent);
+  return manifestMap.keys
+      .where((String key) => key.startsWith('assets/tflite/') && key.endsWith('.tflite'))
+  // assets/tflite/ のパスをファイル名だけに置き換える
+      .map((path) => path.replaceFirst('assets/tflite/', ''))
+      .toList();
+}
 
 class MyApp extends StatelessWidget {
   @override
@@ -35,7 +45,8 @@ class TfliteHome extends StatefulWidget {
 
 class _TfliteHomeState extends State<TfliteHome> {
   // 現在選択中のモデルパス（assets/tflite 内）
-  String _modelPath = availableModels[0];
+  // ※ availableModels は初期では空だが、後述の initState 内で実行時に埋める
+  String _modelPath = availableModels.isNotEmpty ? availableModels[0] : '';
   String _model = dlv3;
 
   File? _image;
@@ -52,9 +63,22 @@ class _TfliteHomeState extends State<TfliteHome> {
   void initState() {
     super.initState();
     _busy = true;
-    loadModel().then((_) {
+
+    // まず assets/tflite 下の .tflite を全部探し出して availableModels に格納
+    _discoverTfliteModels().then((models) {
       setState(() {
-        _busy = false;
+        availableModels.clear();
+        availableModels.addAll(models);
+        // 自動検出結果があれば、デフォルトで最初のモデルに切り替え
+        if (availableModels.isNotEmpty) {
+          _modelPath = availableModels[0];
+        }
+      });
+      // その上で loadModel() を実行
+      loadModel().then((_) {
+        setState(() {
+          _busy = false;
+        });
       });
     });
   }
@@ -463,7 +487,7 @@ class _TfliteHomeState extends State<TfliteHome> {
         actions: [
           // モデル選択用のドロップダウン
           DropdownButton<String>(
-            value: _modelPath,
+            value: _modelPath.isEmpty ? null : _modelPath,
             dropdownColor: Colors.white,
             icon: Icon(Icons.arrow_drop_down, color: Colors.white),
             underline: Container(),
