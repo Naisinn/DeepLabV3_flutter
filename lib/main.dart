@@ -373,10 +373,13 @@ class _TfliteHomeState extends State<TfliteHome> {
       finalW = size.width;
       finalH = size.height;
     } else {
+      // 幅と高さそれぞれの比率
       double ratioW = size.width / _imageWidth!;
       double ratioH = size.height / _imageHeight!;
-      finalW = _imageWidth! * ratioW;
-      finalH = _imageHeight! * ratioH;
+      // 小さい方の比率を採用
+      double scale = ratioW < ratioH ? ratioW : ratioH;
+      finalW = _imageWidth! * scale;
+      finalH = _imageHeight! * scale;
     }
 
     List<Widget> stackChildren = [];
