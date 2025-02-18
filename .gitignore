@@ -1,0 +1,6 @@
+# assets/tflite 内の全ファイルを除外
+assets/tflite/*
+
+# 除外しないファイルを指定
+!assets/tflite/deeplabv3_257_mv_gpu.tflite
+!assets/tflite/deeplabv3_257_mv_gpu.txt
